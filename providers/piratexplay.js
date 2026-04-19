@@ -445,34 +445,37 @@ function getStreams(tmdbId, type, season, episode) {
           return null
         }
 
+        // Step 1 — narrow by TMDB ID embedded in the URL slug
+        // piratexplay encodes the TMDB ID in every slug: /series/one-piece-season-1-37854
+        // This instantly separates "One Piece (anime)" from "One Piece (live action)"
+        var idStr = String(tmdbId)
+        var idMatches = results.filter(function(r) {
+          // Match ID as a standalone number segment in the URL
+          return new RegExp('[-/]' + idStr + '(?:[-/]|$)').test(r.url)
+        })
+        console.log('[PirateXPlay] TMDB-ID matches: ' + idMatches.length
+          + (idMatches.length === 0 ? ' → falling back to title score' : ''))
+
+        var pool = idMatches.length > 0 ? idMatches : results
+
         var best
         if (!isTv) {
-          best = results[0]
+          best = pool[0]
         } else {
-          // piratexplay has one page per season (e.g. /series/one-piece-season-2-xxxx)
-          // Try to find a result whose title or URL mentions the requested season number
+          // piratexplay has one page per season — pick the right season from the pool
           var sNum = parseInt(season)
-          var seasonPatterns = [
-            'season-' + sNum,           // URL slug: season-2
-            'season ' + sNum,           // Title: "Season 2"
-            's' + String(sNum).padStart(2, '0') // S02
-          ]
           var seasonMatch = null
-          for (var i = 0; i < results.length; i++) {
-            var r = results[i]
-            var combined = (r.title + ' ' + r.url).toLowerCase()
-            for (var j = 0; j < seasonPatterns.length; j++) {
-              if (combined.indexOf(seasonPatterns[j]) !== -1) {
-                seasonMatch = r
-                break
-              }
+          for (var i = 0; i < pool.length; i++) {
+            var combined = (pool[i].title + ' ' + pool[i].url).toLowerCase()
+            if (combined.indexOf('season-' + sNum) !== -1 ||
+                combined.indexOf('season ' + sNum) !== -1) {
+              seasonMatch = pool[i]
+              break
             }
-            if (seasonMatch) break
           }
-          // Season 1 fallback: if no "season-N" slug found, take the best title match
-          // (season 1 pages are often just /series/show-name without a season suffix)
-          best = seasonMatch || results[0]
-          console.log('[PirateXPlay] Season ' + sNum + ' page: ' + (seasonMatch ? 'matched' : 'fallback') + ' → ' + best.url)
+          best = seasonMatch || pool[0]
+          console.log('[PirateXPlay] Season ' + sNum + ': '
+            + (seasonMatch ? 'matched' : 'fallback to first') + ' → ' + best.url)
         }
 
         console.log('[PirateXPlay] Content page: ' + best.url)
@@ -543,8 +546,8 @@ if (require.main === module) {
   var TEST = {
     tmdbId : '37854',     // TMDB ID (used only if title is blank)
     type   : 'tv',        // 'tv' | 'movie'
-    season : '1',
-    episode: '1',
+    season : '2',
+    episode: '5',
     title  : 'One Piece', // ← set this to skip TMDB lookup
     year   : 1999         // ← set this to skip TMDB lookup
   }
