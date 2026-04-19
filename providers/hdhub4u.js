@@ -9,6 +9,14 @@ var SEARCH_URL  = 'https://search.pingora.fyi/collections/post/documents/search'
 var UA          = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0'
 var COOKIE      = 'xla=s4t'
 
+var BASE_HEADERS = {
+  'User-Agent'     : UA,
+  'Accept'         : 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.5',
+  'Connection'     : 'close',
+  'Upgrade-Insecure-Requests': '1'
+}
+
 var domainCache = { url: 'https://hdhub4u.rehab', ts: 0 }
 
 // ── WebCrypto shim for Node.js testing ───────────────────────────────────────
@@ -20,7 +28,7 @@ var _crypto = (typeof crypto !== 'undefined' && crypto.subtle)
 
 function httpGet(url, headers) {
   return fetch(url, {
-    headers: Object.assign({ 'User-Agent': UA }, headers || {})
+    headers: Object.assign({}, BASE_HEADERS, headers || {})
   }).then(function(r) {
     if (!r.ok) throw new Error('HTTP ' + r.status + ' → ' + url)
     return r.text()
@@ -29,7 +37,7 @@ function httpGet(url, headers) {
 
 function httpGetJson(url, headers) {
   return fetch(url, {
-    headers: Object.assign({ 'User-Agent': UA }, headers || {})
+    headers: Object.assign({}, BASE_HEADERS, headers || {})
   }).then(function(r) {
     if (!r.ok) throw new Error('HTTP ' + r.status + ' → ' + url)
     return r.json()
@@ -248,8 +256,9 @@ function extractHubCloud(url) {
           var headerMatch = html.match(/<div[^>]*class="[^"]*card-header[^"]*"[^>]*>([\s\S]*?)<\/div>/)
           var quality = extractQuality(headerMatch ? headerMatch[1] : html)
 
-          var streams = []
-          var seen    = {}
+          var directStreams = []
+          var buzzJobs      = []
+          var seen          = {}
 
           function parseBtn(href, rawLabel) {
             if (!href || seen[href]) return
@@ -272,7 +281,12 @@ function extractHubCloud(url) {
               href = base + '/api/file/' + href.split('/u/').pop() + '?download'
             }
 
-            streams.push({ url: href, quality: quality, source: source })
+            // BuzzServer: must follow hx-redirect header (CS: allowRedirects=false)
+            if (source === 'BuzzServer') {
+              buzzJobs.push({ url: href, quality: quality })
+            } else {
+              directStreams.push({ url: href, quality: quality, source: source })
+            }
           }
 
           var m
@@ -282,8 +296,16 @@ function extractHubCloud(url) {
           while ((m = btnRe1.exec(html)) !== null) parseBtn(m[1], m[2])
           while ((m = btnRe2.exec(html)) !== null) parseBtn(m[1], m[2])
 
-          console.log('[HDhub4u] HubCloud streams: ' + streams.length)
-          return streams
+          // Resolve BuzzServer redirects (hx-redirect header) in parallel
+          return Promise.all(buzzJobs.map(function(j) {
+            return resolveBuzzServer(j.url, j.quality)
+          })).then(function(buzzResults) {
+            var streams = directStreams.concat(
+              buzzResults.reduce(function(acc, r) { return acc.concat(r) }, [])
+            )
+            console.log('[HDhub4u] HubCloud streams: ' + streams.length)
+            return streams
+          })
         })
     })
     .catch(function(e) {
@@ -365,6 +387,50 @@ function extractVidStack(url) {
     })
 }
 
+// ── HUBCDN extractor ──────────────────────────────────────────────────────────
+// CS ref: HUBCDN.getUrl() — parses `var reurl = "<base64>"` from inline script
+
+function extractHubCdn(url) {
+  return httpGet(url, { 'Referer': url })
+    .then(function(html) {
+      // Find: var reurl = "BASE64STRING"
+      var m = html.match(/var\s+reurl\s*=\s*["']([A-Za-z0-9+\/=]+)["']/)
+      if (!m) {
+        console.log('[HDhub4u] HUBCDN: no reurl found')
+        return []
+      }
+      var videoUrl = b64decode(m[1]).trim()
+      if (!videoUrl) return []
+      console.log('[HDhub4u] HUBCDN → ' + videoUrl)
+      return [{ url: videoUrl, quality: extractQuality(html), source: 'HUBCDN' }]
+    })
+    .catch(function(e) {
+      console.log('[HDhub4u] HUBCDN error: ' + e.message)
+      return []
+    })
+}
+
+// ── BuzzServer redirect follow ────────────────────────────────────────────────
+// CS ref: HubCloud parseBtn "BuzzServer" — GET link with allowRedirects=false,
+// then use the hx-redirect response header as the real video URL
+
+function resolveBuzzServer(url, quality) {
+  return fetch(url, {
+    redirect: 'manual',
+    headers: { 'User-Agent': UA, 'Referer': url }
+  })
+    .then(function(r) {
+      var redirect = r.headers.get('hx-redirect') || r.headers.get('location')
+      var finalUrl = redirect || url
+      console.log('[HDhub4u] BuzzServer → ' + finalUrl)
+      return [{ url: finalUrl, quality: quality || 'HD', source: 'BuzzServer' }]
+    })
+    .catch(function(e) {
+      console.log('[HDhub4u] BuzzServer error: ' + e.message)
+      return [{ url: url, quality: quality || 'HD', source: 'BuzzServer' }]
+    })
+}
+
 // ── Host-based extractor dispatcher ──────────────────────────────────────────
 
 function extractByHost(url) {
@@ -373,6 +439,7 @@ function extractByHost(url) {
   if (/hubcloud/.test(host))             return extractHubCloud(url)
   if (/hubstream|hdstream4u/.test(host)) return extractVidStack(url)
   if (/hubdrive/.test(host))             return extractHubDrive(url)
+  if (/hubcdn/.test(host))               return extractHubCdn(url)
   console.log('[HDhub4u] No extractor for: ' + host)
   return Promise.resolve([])
 }
@@ -564,89 +631,121 @@ function getStreams(tmdbId, type, season, episode) {
 
 module.exports = { getStreams }
 
-// ── Local test runner (node providers/hdhub4u.js) ────────────────────────────
+// ── Local test runner ─────────────────────────────────────────────────────────
+// Run: node providers/hdhub4u.js
+// Tests each major step: domain → TMDB → search → page → links → streams
+
 if (require.main === module) {
-  // ✏️  Edit TEST to try different content. Set title+year to skip TMDB fetch.
+  // ── Override global.fetch using undici with SSL verification disabled ──────
+  // undici is bundled with Node 18+ and properly handles TLS/HTTP2
+  var _undici = require('undici')
+  var _noSslDispatcher = new _undici.Agent({
+    connect: { rejectUnauthorized: false }
+  })
+
+  global.fetch = function(url, options) {
+    options = options || {}
+    return _undici.fetch(url, Object.assign({ dispatcher: _noSslDispatcher }, options))
+  }
+
+  // ── Test parameters ───────────────────────────────────────────────────────
+  // Set title/year directly to skip TMDB lookup (faster for local testing):
   var TEST = {
-    tmdbId : '580489',
-    type   : 'movie',
-    season : '',
-    episode: '',
-    title  : 'Venom The Last Dance',
-    year   : 2024
+    tmdbId : '1396',       // Breaking Bad (tv)  | 27205 = Inception (movie)
+    type   : 'tv',         // 'movie' or 'tv'
+    season : '1',
+    episode: '1',
+    // Optional: set these to bypass TMDB API call entirely
+    title  : 'Breaking Bad',   // set to '' to use TMDB lookup
+    year   : 2008
   }
-  // TV example:
-  // var TEST = { tmdbId: '1396', type: 'tv', season: '1', episode: '1', title: 'Breaking Bad', year: 2008 }
 
-  function runTest(title, year) {
-    var isTv = TEST.type === 'tv' || TEST.type === 'series'
-    console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-    console.log('  HDhub4u — local test')
-    console.log('  "' + title + '" (' + year + ') · ' + TEST.type.toUpperCase()
-      + (isTv ? ' · S' + TEST.season + 'E' + TEST.episode : ''))
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
+  console.log('\n══════════════════════════════════')
+  console.log('  HDhub4u Test Runner')
+  console.log('══════════════════════════════════')
+  console.log('  TMDB ID : ' + TEST.tmdbId)
+  console.log('  Type    : ' + TEST.type)
+  if (TEST.type === 'tv')
+    console.log('  Episode : S' + TEST.season + 'E' + TEST.episode)
+  console.log('══════════════════════════════════\n')
 
-    var domain
-    fetchDomain()
-      .then(function(d) { domain = d; return searchSite(title, isTv, d) })
-      .then(function(results) {
-        if (!results || results.length === 0) {
-          console.error('[TEST] ✗ Step 1: no search results'); return null
-        }
-        console.log('[TEST] ✓ Step 1 – search OK (' + results.length + ' results)')
-        var pageUrl = results[0].url
-        console.log('[TEST] ✓ Step 2 – content page: ' + pageUrl)
-        if (isTv) return getEpisodeLinks(pageUrl, TEST.season, TEST.episode, domain)
-        return getMovieLinks(pageUrl, domain)
-      })
-      .then(function(rawLinks) {
-        if (!rawLinks) return null
-        if (rawLinks.length === 0) { console.error('[TEST] ✗ Step 3: no links found'); return null }
-        console.log('[TEST] ✓ Step 3 – raw links: ' + rawLinks.length)
-        rawLinks.slice(0, 5).forEach(function(l, i) { console.log('         [' + (i+1) + '] ' + l) })
-        return Promise.all(rawLinks.map(function(u) {
-          return resolveLink(u).catch(function() { return [] })
-        }))
-      })
-      .then(function(all) {
-        if (!all) return
-        var flat = all.reduce(function(acc, r) { return acc.concat(r) }, [])
-        var seen = {}
-        flat = flat.filter(function(s) {
-          if (!s || !s.url || seen[s.url]) return false
-          seen[s.url] = true; return true
+  var _domain
+
+  // Step 1: Domain
+  console.log('Step 1 — Fetching domain...')
+  fetchDomain()
+    .then(function(d) {
+      _domain = d
+      console.log('  ✓ Domain: ' + d)
+
+      // Step 2: TMDB (skip if title is set directly)
+      if (TEST.title) {
+        console.log('\nStep 2 — TMDB skipped (using hardcoded title)')
+        return { title: TEST.title, year: TEST.year }
+      }
+      console.log('\nStep 2 — Fetching TMDB details...')
+      return getTmdbDetails(TEST.tmdbId, TEST.type)
+    })
+    .then(function(details) {
+      console.log('  ✓ Title: ' + details.title + ' (' + details.year + ')')
+
+      // Step 3: Search
+      console.log('\nStep 3 — Searching site...')
+      return searchSite(details.title, TEST.type === 'tv', _domain)
+    })
+    .then(function(results) {
+      if (!results || results.length === 0) {
+        console.log('  ✗ No results found')
+        process.exit(1)
+      }
+      var best = results[0]
+      console.log('  ✓ Best match: "' + best.title + '"')
+      console.log('  ✓ URL: ' + best.url)
+
+      // Step 4: Content page
+      console.log('\nStep 4 — Parsing content page...')
+      if (TEST.type === 'tv')
+        return getEpisodeLinks(best.url, TEST.season, TEST.episode, _domain)
+      return getMovieLinks(best.url, _domain)
+    })
+    .then(function(rawLinks) {
+      if (!rawLinks || rawLinks.length === 0) {
+        console.log('  ✗ No raw links found on page')
+        process.exit(1)
+      }
+      console.log('  ✓ Raw links: ' + rawLinks.length)
+      rawLinks.forEach(function(l, i) { console.log('    [' + (i+1) + '] ' + l) })
+
+      // Step 5: Resolve links
+      console.log('\nStep 5 — Resolving ' + rawLinks.length + ' link(s)...')
+      return Promise.all(rawLinks.slice(0, 4).map(function(u) {   // cap at 4 for speed
+        return resolveLink(u).catch(function(e) {
+          console.log('  ✗ resolve error: ' + e.message)
+          return []
         })
+      }))
+    })
+    .then(function(all) {
+      var flat = all.reduce(function(acc, r) { return acc.concat(r) }, [])
+      var seen = {}
+      flat = flat.filter(function(s) {
+        if (!s || !s.url || seen[s.url]) return false
+        seen[s.url] = true
+        return true
+      })
 
-        console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
-        if (flat.length === 0) {
-          console.log('  ✗  No streams found')
-        } else {
-          console.log('  ✓  ' + flat.length + ' stream(s) found\n')
-          flat.forEach(function(s, i) {
-            console.log('  [' + (i+1) + '] ' + (s.quality || 'HD') + ' · ' + (s.source || ''))
-            console.log('      ' + s.url)
-            console.log()
-          })
-        }
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
+      console.log('\n══════════════════════════════════')
+      console.log('  FINAL STREAMS: ' + flat.length)
+      console.log('══════════════════════════════════')
+      flat.forEach(function(s, i) {
+        console.log('  [' + (i+1) + '] ' + (s.quality || 'HD') + ' | ' + (s.source || '?') + ' | ' + s.url)
       })
-      .catch(function(err) {
-        console.error('[TEST] ✗ Error: ' + err.message)
-        console.error(err.stack || '')
-      })
-  }
-
-  if (TEST.title) {
-    runTest(TEST.title, TEST.year)
-  } else {
-    getTmdbDetails(TEST.tmdbId, TEST.type)
-      .then(function(d) {
-        if (!d || !d.title) { console.error('[TEST] ✗ TMDB lookup failed'); return }
-        runTest(d.title, d.year)
-      })
-      .catch(function(e) {
-        console.error('[TEST] ✗ TMDB fetch error: ' + e.message)
-        console.error('      Set TEST.title + TEST.year to skip TMDB')
-      })
-  }
+      console.log('')
+    })
+    .catch(function(err) {
+      console.error('\n  ✗ FATAL: ' + err.message)
+      if (err.stack) console.error(err.stack)
+      process.exit(1)
+    })
 }
+

@@ -12,7 +12,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/HDhub4u/src/main/kotlin/com/hdhub4u/Extractors.kt\")",
       "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/HDhub4u/src/main/kotlin/com/hdhub4u/HDhub4uPlugin.kt\")",
-      "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/HDhub4u/src/main/kotlin/com/hdhub4u/HDhub4uProvider.kt\")"
+      "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/HDhub4u/src/main/kotlin/com/hdhub4u/HDhub4uProvider.kt\")",
+      "Bash(node providers/hdhub4u.js)"
     ]
   }
 }
