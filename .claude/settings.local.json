@@ -1,7 +1,18 @@
 {
   "permissions": {
     "allow": [
-      "Bash(awk '{print $NF}')"
+      "Bash(awk '{print $NF}')",
+      "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/Piratexplay/src/main/kotlin/com/piratexplay/Piratexplay.kt\")",
+      "Bash(gh api *)",
+      "Bash(curl -s \"https://api.github.com/repos/phisher98/cloudstream-extensions-phisher/contents/Piratexplay/src/main/kotlin/com/piratexplay\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/Piratexplay/src/main/kotlin/com/piratexplay/Extractor.kt\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/Piratexplay/src/main/kotlin/com/piratexplay/PiratexplayProvider.kt\")",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/HDhub4u/src/main/kotlin/com/hdhub4u/Extractors.kt\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/HDhub4u/src/main/kotlin/com/hdhub4u/HDhub4uPlugin.kt\")",
+      "Bash(curl -s \"https://raw.githubusercontent.com/phisher98/cloudstream-extensions-phisher/master/HDhub4u/src/main/kotlin/com/hdhub4u/HDhub4uProvider.kt\")"
     ]
   }
 }

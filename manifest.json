@@ -1,5 +1,20 @@
 {
   "name": "Abhishek",
   "version": "1.0.0",
-  "scrapers": []
+
+  "scrapers": [
+    {
+      "id": "hdhub4u",
+      "name": "🎬 HDhub4u",
+      "description": "HDhub4u — Bollywood, Hollywood, South Hindi, Web Series",
+      "version": "1.0.0",
+      "author": "Abhishek",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/hdhub4u.js",
+      "enabled": true,
+      "formats": ["mp4", "m3u8"],
+      "logo": "https://i.postimg.cc/download-(2).png",
+      "contentLanguage": ["hi", "en", "ta", "te", "ml"]
+    }
+  ]
 }
