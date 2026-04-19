@@ -83,6 +83,19 @@
       "contentLanguage": ["en", "ja"]  
     },
     {
+      "id": "piratexplay",
+      "name": "🏴‍☠️ PirateXPlay",
+      "description": "PirateXPlay — Anime, Cartoon & Asian content in Hindi/Multi",
+      "version": "1.0.0",
+      "author": "Abhishek",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/piratexplay.js",
+      "enabled": true,
+      "formats": ["m3u8", "mp4"],
+      "logo": "https://piratexplay.cc/wp-content/uploads/2024/01/cropped-piratex-192x192.png",
+      "contentLanguage": ["hi", "en", "ja", "ko", "zh"]
+    },
+    {
       "id": "animesalt",
       "name": "🧂 AnimeSalt",
       "description": "AnimeSalt India",
