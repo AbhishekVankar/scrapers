@@ -150,27 +150,37 @@ function findEpisodeInHtml(html, targetSeason, targetEpisode) {
   var s = parseInt(targetSeason)
   var e = parseInt(targetEpisode)
 
-  // Episodes list lives in #episode_by_temp
-  var listMatch = html.match(/id="episode_by_temp"([\s\S]*?)(?:<\/ul>|<\/section>|<\/div>)/m)
-  var epHtml = listMatch ? listMatch[1] : html
+  // Real site structure (confirmed from HTML inspection):
+  //   <li>
+  //     <article class="episodes ...">
+  //       <span class="num-epi">
+  //           1x1                    ← whitespace around the code
+  //       </span>
+  //       <a href="/episode/one-piece-season-1-37854-1x1/" class="lnk-blk"></a>
+  //     </article>
+  //   </li>
 
   var liRegex = /<li[^>]*>([\s\S]*?)<\/li>/g
   var m
-  while ((m = liRegex.exec(epHtml)) !== null) {
+  while ((m = liRegex.exec(html)) !== null) {
     var liHtml = m[1]
-    // Span format: "1x3" = season 1 episode 3
-    var spanMatch = liHtml.match(/<span[^>]*>(\d+)[xX](\d+)<\/span>/)
+
+    // Match <span class="num-epi"> with \s* to handle surrounding whitespace
+    var spanMatch = liHtml.match(/<span[^>]*class="[^"]*num-epi[^"]*"[^>]*>\s*(\d+)[xX](\d+)\s*<\/span>/)
     if (!spanMatch) continue
     if (parseInt(spanMatch[1]) !== s || parseInt(spanMatch[2]) !== e) continue
 
-    var hrefMatch = liHtml.match(/href="([^"]+)"/)
-    if (hrefMatch) {
-      var epUrl = hrefMatch[1]
-      // Handle relative URLs
-      if (epUrl.indexOf('http') !== 0) epUrl = BASE_URL + epUrl
-      return epUrl
-    }
+    // Grab the episode href (relative like /episode/.../)
+    var hrefMatch = liHtml.match(/href="(\/episode\/[^"]+)"/)
+    if (!hrefMatch) hrefMatch = liHtml.match(/href="([^"]+)"/)
+    if (!hrefMatch) continue
+
+    var epUrl = hrefMatch[1]
+    if (epUrl.indexOf('http') !== 0) epUrl = BASE_URL + epUrl
+    console.log('[PirateXPlay] Episode URL: ' + epUrl)
+    return epUrl
   }
+
   return null
 }
 
