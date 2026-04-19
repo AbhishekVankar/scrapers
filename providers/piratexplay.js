@@ -101,35 +101,44 @@ function searchSite(title, isTv) {
       var listHtml = containerMatch ? containerMatch[1] : html
 
       // Each result is an <li> with an <a href> and <h2> title
+      // Accept BOTH absolute (https://piratexplay.cc/...) and relative (/slug/) hrefs
       var liRegex = /<li[^>]*>([\s\S]*?)<\/li>/g
       var m
       while ((m = liRegex.exec(listHtml)) !== null) {
         var liHtml = m[1]
-        var hrefMatch = liHtml.match(/href="(https?:\/\/piratexplay\.cc\/[^"]+)"/)
+        var hrefMatch = liHtml.match(/href="((?:https?:\/\/piratexplay\.cc)?\/[^"]+)"/)
         var titleMatch = liHtml.match(/<h2[^>]*>([^<]+)<\/h2>/)
         if (!hrefMatch || !titleMatch) continue
 
         var itemUrl = hrefMatch[1]
+        // Normalise relative → absolute
+        if (itemUrl.indexOf('http') !== 0) itemUrl = BASE_URL + itemUrl
         var itemTitle = titleMatch[1].trim()
-
-        // CS uses url.contains("movie") to distinguish type
-        var isMovieUrl = itemUrl.indexOf('/movie') !== -1
-        if (isTv && isMovieUrl) continue
-        if (!isTv && !isMovieUrl) continue
 
         results.push({ url: itemUrl, title: itemTitle })
       }
 
-      console.log('[PirateXPlay] Results after type filter: ' + results.length)
+      console.log('[PirateXPlay] Raw results: ' + results.length)
 
-      results.sort(function(a, b) {
+      // Type filter: CS uses url.contains("movie") → Movie, else → TvSeries
+      var typed = results.filter(function(r) {
+        var isMovieUrl = r.url.indexOf('/movie') !== -1
+        return isTv ? !isMovieUrl : isMovieUrl
+      })
+
+      // Fall back to all results if type filter wipes everything
+      // (handles edge cases where the site URL pattern doesn't match)
+      var candidates = typed.length > 0 ? typed : results
+      console.log('[PirateXPlay] After type filter: ' + candidates.length + (typed.length === 0 ? ' (fallback)' : ''))
+
+      candidates.sort(function(a, b) {
         return titleScore(b.title, title) - titleScore(a.title, title)
       })
 
-      if (results.length > 0) {
-        console.log('[PirateXPlay] Best match: "' + results[0].title + '" → ' + results[0].url)
+      if (candidates.length > 0) {
+        console.log('[PirateXPlay] Best match: "' + candidates[0].title + '" → ' + candidates[0].url)
       }
-      return results
+      return candidates
     })
 }
 
@@ -425,11 +434,41 @@ function getStreams(tmdbId, type, season, episode) {
           resolve([])
           return null
         }
-        var best = results[0]
+
+        var best
+        if (!isTv) {
+          best = results[0]
+        } else {
+          // piratexplay has one page per season (e.g. /series/one-piece-season-2-xxxx)
+          // Try to find a result whose title or URL mentions the requested season number
+          var sNum = parseInt(season)
+          var seasonPatterns = [
+            'season-' + sNum,           // URL slug: season-2
+            'season ' + sNum,           // Title: "Season 2"
+            's' + String(sNum).padStart(2, '0') // S02
+          ]
+          var seasonMatch = null
+          for (var i = 0; i < results.length; i++) {
+            var r = results[i]
+            var combined = (r.title + ' ' + r.url).toLowerCase()
+            for (var j = 0; j < seasonPatterns.length; j++) {
+              if (combined.indexOf(seasonPatterns[j]) !== -1) {
+                seasonMatch = r
+                break
+              }
+            }
+            if (seasonMatch) break
+          }
+          // Season 1 fallback: if no "season-N" slug found, take the best title match
+          // (season 1 pages are often just /series/show-name without a season suffix)
+          best = seasonMatch || results[0]
+          console.log('[PirateXPlay] Season ' + sNum + ' page: ' + (seasonMatch ? 'matched' : 'fallback') + ' → ' + best.url)
+        }
+
         console.log('[PirateXPlay] Content page: ' + best.url)
 
         if (!isTv) return best.url
-        // TV: resolve specific episode URL
+        // TV: resolve specific episode URL from the season page
         return getEpisodeUrl(best.url, season, episode)
       })
       .then(function(targetUrl) {
@@ -486,3 +525,156 @@ function getStreams(tmdbId, type, season, episode) {
 }
 
 module.exports = { getStreams }
+
+// ── Local test runner (only runs via: node providers/piratexplay.js) ──────────
+if (require.main === module) {
+  // ✏️  Edit these to test any content.
+  // Set title+year to SKIP the TMDB fetch (useful if TMDB is blocked in Node).
+  var TEST = {
+    tmdbId : '37854',     // TMDB ID (used only if title is blank)
+    type   : 'tv',        // 'tv' | 'movie'
+    season : '1',
+    episode: '1',
+    title  : 'One Piece', // ← set this to skip TMDB lookup
+    year   : 1999         // ← set this to skip TMDB lookup
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────
+  function printResult(streams) {
+    console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+    if (!streams || streams.length === 0) {
+      console.log('  ✗  No streams found')
+    } else {
+      console.log('  ✓  ' + streams.length + ' stream(s) found\n')
+      streams.forEach(function(s, i) {
+        console.log('  [' + (i + 1) + '] ' + s.quality + ' · ' + (s.title || ''))
+        console.log('      URL  : ' + s.url)
+        if (s.headers && s.headers['Referer']) {
+          console.log('      REF  : ' + s.headers['Referer'])
+        }
+        console.log()
+      })
+    }
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
+  }
+
+  // Run the pipeline step by step so errors are easy to pinpoint
+  function runTest(title, year) {
+    var isTv = TEST.type === 'tv' || TEST.type === 'series'
+
+    console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+    console.log('  PirateXPlay — local test')
+    console.log('  "' + title + '" (' + year + ') · ' + TEST.type.toUpperCase()
+      + (isTv ? ' · S' + TEST.season + 'E' + TEST.episode : ''))
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
+
+    // Step 1 – search
+    searchSite(title, isTv)
+      .then(function(results) {
+        if (!results || results.length === 0) {
+          console.error('[TEST] ✗ Step 1 failed: no search results')
+          printResult([])
+          return null
+        }
+        console.log('[TEST] ✓ Step 1 – search OK (' + results.length + ' results)')
+
+        // Step 2 – pick correct season/page
+        var best
+        if (!isTv) {
+          best = results[0]
+        } else {
+          var sNum = parseInt(TEST.season)
+          var seasonPatterns = ['season-' + sNum, 'season ' + sNum, 's' + String(sNum).padStart(2, '0')]
+          var seasonMatch = null
+          for (var i = 0; i < results.length; i++) {
+            var combined = (results[i].title + ' ' + results[i].url).toLowerCase()
+            for (var j = 0; j < seasonPatterns.length; j++) {
+              if (combined.indexOf(seasonPatterns[j]) !== -1) { seasonMatch = results[i]; break }
+            }
+            if (seasonMatch) break
+          }
+          best = seasonMatch || results[0]
+          console.log('[TEST] ✓ Step 2 – season page: ' + best.url)
+        }
+
+        if (!isTv) return best.url
+
+        // Step 3 – episode URL
+        return getEpisodeUrl(best.url, TEST.season, TEST.episode)
+          .then(function(epUrl) {
+            if (!epUrl) {
+              console.error('[TEST] ✗ Step 3 failed: episode not found on season page')
+              return null
+            }
+            console.log('[TEST] ✓ Step 3 – episode URL: ' + epUrl)
+            return epUrl
+          })
+      })
+      .then(function(targetUrl) {
+        if (!targetUrl) { printResult([]); return null }
+
+        // Step 4 – iframes
+        return getIframesFromPage(targetUrl)
+          .then(function(embedUrls) {
+            if (!embedUrls || embedUrls.length === 0) {
+              console.error('[TEST] ✗ Step 4 failed: no iframes on page')
+              printResult([])
+              return null
+            }
+            console.log('[TEST] ✓ Step 4 – embed URLs: ' + embedUrls.length)
+            embedUrls.forEach(function(u, i) { console.log('         [' + (i+1) + '] ' + u) })
+
+            // Step 5 – extract streams
+            return Promise.all(embedUrls.map(function(u) {
+              return extractStreams(u).catch(function(e) {
+                console.error('[TEST] ✗ extractor failed for ' + u + ': ' + e.message)
+                return []
+              })
+            }))
+          })
+      })
+      .then(function(allResults) {
+        if (!allResults) return
+        var flat = allResults.reduce(function(acc, r) { return acc.concat(r) }, [])
+        var seen = {}
+        flat = flat.filter(function(s) {
+          if (!s || !s.url || seen[s.url]) return false
+          seen[s.url] = true
+          return true
+        })
+        var streams = flat.map(function(s) {
+          return {
+            name   : '🏴‍☠️ PirateXPlay',
+            title  : 'PirateXPlay • ' + (s.source || 'Stream') + ' • ' + (s.quality || 'HD'),
+            url    : s.url,
+            quality: s.quality || 'HD',
+            headers: { 'Referer': BASE_URL + '/', 'User-Agent': UA }
+          }
+        })
+        console.log('[TEST] ✓ Step 5 – streams extracted: ' + streams.length)
+        printResult(streams)
+      })
+      .catch(function(err) {
+        console.error('[TEST] ✗ Unexpected error: ' + err.message)
+        console.error(err.stack || '')
+        printResult([])
+      })
+  }
+
+  // If title is provided, skip TMDB and run directly.
+  // Otherwise fetch TMDB first (requires Node 18+ with working fetch).
+  if (TEST.title) {
+    runTest(TEST.title, TEST.year)
+  } else {
+    console.log('[TEST] Fetching TMDB details for id ' + TEST.tmdbId + '...')
+    getTmdbDetails(TEST.tmdbId, TEST.type)
+      .then(function(d) {
+        if (!d || !d.title) { console.error('[TEST] ✗ TMDB lookup failed'); return }
+        runTest(d.title, d.year)
+      })
+      .catch(function(e) {
+        console.error('[TEST] ✗ TMDB fetch error: ' + e.message)
+        console.error('      → Set TEST.title and TEST.year to skip TMDB lookup')
+      })
+  }
+}
